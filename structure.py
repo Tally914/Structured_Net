@@ -8,23 +8,21 @@ loss = rmse
 
 
 class Structure:
-    def __init__(self, dataframe, targets, cat_cols, con_cols, ts_cols, random_state=42):
+    def __init__(self, dataframe, targets, cat_cols, con_cols, random_state=42):
         self.data = shfl(dataframe, random_state=random_state)
         self.random_state = random_state
         self.targets = targets
         self.cat_cols = cat_cols
         self.con_cols = con_cols
-        self.ts_cols = ts_cols
-        self.data[con_cols] = self.data[con_cols].replace([np.inf, -np.inf, np.nan, np.NaN], -1.0)
-        self.data[con_cols] = self.data[con_cols].fillna(-1.0)
-        self.data[con_cols] = self.data[con_cols].astype(float)
-        self.data[cat_cols] = self.data[cat_cols].replace([np.inf, -np.inf, np.nan, np.NaN], "-1.0")
-        self.data[cat_cols] = self.data[cat_cols].fillna("-1.0")
-        self.data[cat_cols] = self.data[cat_cols].astype(str)
-        for list in ts_cols:
-            self.data[list] = self.data[list].replace([np.inf, -np.inf, np.nan, np.NaN], -1.0)
-            self.data[list] = self.data[list].fillna(-1.0)
-            self.data[list] = self.data[list].astype(float)
+        for col in con_cols:
+            self.data[con_cols] = self.data[con_cols].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+            self.data[col].fillna(self.data[col].median(), inplace=True)
+            self.data[col].fillna(self.data[col].median(), inplace=True)
+
+        for col in cat_cols:
+            self.data[con_cols] = self.data[con_cols].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+            self.data[col].fillna("None", inplace=True)
+            self.data[col].fillna("None", inplace=True)
 
     def processing(self):
 
@@ -197,3 +195,78 @@ class Structure:
 
         self.nn_model = model
         self.nn_history = history
+
+
+class Estimator:
+    def __init__(self, train_data, test_data, feature_columns, target_columns):
+        self.train_data = {}
+        for key in list(train_data[feature_columns]):
+            vals = train_data[key].values
+            self.train_data[key] = vals.astype(float)
+        self.train_targets = train_data[target_columns].values.astype(float)
+        print('Train data processed!')
+
+        self.test_data = {}
+        for key in list(test_data[feature_columns]):
+            vals = test_data[key].values
+            self.test_data[key] = vals.astype(float)
+        self.test_targets = test_data[target_columns].values.astype(float)
+        print('Test data processed!')
+
+        self.bucketized_columns = []
+        for col in feature_columns:
+            data = train_data[col].astype(float)
+            boundaries = sorted([data.min(), data.mean(), data.max()])
+            numeric_col = tf.feature_column.numeric_column(col)
+            try:
+                bucketized_col = tf.feature_column.bucketized_column(numeric_col, boundaries=boundaries)
+            except ValueError:
+                bucketized_col = tf.feature_column.bucketized_column(numeric_col, boundaries=[-1.0, 0.0, 1.0])
+            self.bucketized_columns.append(bucketized_col)
+        self.feature_columns = feature_columns
+        self.target_columns = target_columns
+
+    def train_input_fn(self, feature_dict, label_array, batch_size):
+        """An input function for training"""
+
+        # Convert the inputs to a Dataset.
+        dataset = tf.data.Dataset.from_tensor_slices((feature_dict, label_array))
+
+        # Shuffle, repeat, and batch the examples.
+        return dataset.shuffle(42).repeat().batch(batch_size)
+
+    def boosted_tree(self, type, batch_size):
+        if type == 'regressor':
+            tree = estimator.BoostedTreesRegressor(self.bucketized_columns,
+                                                   n_batches_per_layer=int(len(self.train_data) / batch_size))
+        elif type == 'classifier':
+            n_classes = len(np.unique(self.test_targets))
+            print(n_classes)
+            tree = estimator.BoostedTreesClassifier(self.bucketized_columns,
+                                                    n_batches_per_layer=int(len(self.train_data) / batch_size),
+                                                    n_classes=len(np.unique(self.test_targets)))
+        else:
+            print('Error: Incorrect tree_type passed. Breaking')
+            tree = "None"
+
+        tree.train(input_fn=lambda: self.train_input_fn(self.train_data, self.train_targets, batch_size))
+
+        return tree
+
+    def dnn(self, type, batch_size):
+        if type == 'regressor':
+
+            reg = estimator.DNNLinearCombinedRegressor(dnn_feature_columns=self.bucketized_columns,
+                                                       dnn_activation_fn=tf.nn.elu,
+                                                       dnn_hidden_units=[100, 100, 100])
+        elif type == 'classifier':
+            reg = estimator.DNNLinearCombinedClassifier(dnn_feature_columns=self.bucketized_columns,
+                                                        dnn_activation_fn=tf.nn.elu,
+                                                        dnn_hidden_units=[100, 100, 100],
+                                                        n_classes=len(np.unique(self.test_targets)))
+        else:
+            print('Error: Incorrect net_type passed. Breaking')
+            reg = "None"
+
+        reg.train(input_fn=lambda: self.train_input_fn(self.train_data, self.train_targets, batch_size))
+        return reg

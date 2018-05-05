@@ -1,5 +1,6 @@
 # from fastai.structured import *
 # from fastai.column_data import *
+from tensorflow.python import estimator
 import math, os, json, sys, re
 import threading
 # import cPickle as pickle  # Python 2
