@@ -1,5 +1,3 @@
-# from fastai.structured import *
-# from fastai.column_data import *
 from tensorflow.python import estimator
 import math, os, json, sys, re
 import threading
@@ -24,7 +22,6 @@ import torch
 # from torch.utils.data import Dataset, TensorDataset
 # from torch.utils.data.sampler import SequentialSampler, RandomSampler, BatchSampler
 # import torchtext, torchvision
-import keras
 import sklearn
 from sklearn.utils import shuffle as shfl
 import tensorflow as tf
@@ -57,50 +54,43 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.manifold import TSNE
 from sklearn.model_selection import train_test_split
 import multiprocessing
-from keras.applications.inception_resnet_v2 import InceptionResNetV2
+from tensorflow.python.keras.applications.inception_resnet_v2 import InceptionResNetV2
 import dask.array as da
 import multiprocessing
-from keras.utils import Sequence
+from tensorflow.python.keras.utils import Sequence
 import PIL, os, math, collections, threading, json, bcolz, random, scipy, cv2, io
-import keras
-from keras import backend as K
-from keras.utils.data_utils import get_file
-from keras.utils import np_utils
+from tensorflow.python.keras import backend as K
+from tensorflow.python.keras.utils import get_file
 
 from selenium import webdriver
 
-from keras.utils.np_utils import to_categorical
-from keras.models import Sequential, Model, load_model
-from keras.layers import Input, Embedding, Reshape, LSTM, Bidirectional, TimeDistributed, Activation, SimpleRNN, GRU, Merge, deserialize, GlobalAveragePooling2D
-from keras.layers import SpatialDropout1D
+from tensorflow.python.keras.utils import to_categorical
+from tensorflow.python.keras.models import Sequential, Model, load_model
+from tensorflow.python.keras.layers import Flatten, Dense, Dropout, Lambda, Input, Layer, Embedding, Reshape, LSTM, Bidirectional, BatchNormalization, TimeDistributed, Activation, SimpleRNN, concatenate, GRU, Concatenate, GlobalAveragePooling2D, SpatialDropout1D
 import random, pickle, sys, itertools, string, sys, re, datetime, time, shutil
 from operator import itemgetter, attrgetter
 from collections import Iterable, Counter, OrderedDict
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 # from keras_tqdm import TQDMCallback, TQDMNotebookCallback
-from keras.layers.core import Flatten, Dense, Dropout, Lambda
 
 # from keras.regularizers import l2, activity_l2, l1, activity_l1  # Keras1
-from keras.regularizers import l2, l1  # Keras2
+from tensorflow.python.keras.regularizers import l2, l1  # Keras2
 
-from keras.layers.normalization import BatchNormalization
-from keras.optimizers import SGD, RMSprop, Adam, Nadam
+from tensorflow.python.keras.optimizers import SGD, RMSprop, Adam, Nadam
 from lxml import etree as ET
 # from keras.utils.layer_utils import layer_from_config  # Keras1
 # from keras.layers import deserialize  # Keras 2
-from keras.layers import concatenate
 # from keras.layers.merge import dot, add, concatenate  # Keras2
-from keras.metrics import categorical_crossentropy, categorical_accuracy
-from keras.layers.convolutional import *
-from keras.preprocessing.sequence import pad_sequences
-from keras.callbacks import *
-from keras.preprocessing import image
-from keras.preprocessing.text import Tokenizer
+from tensorflow.python.keras.metrics import categorical_crossentropy, categorical_accuracy
+
+from tensorflow.python.keras.preprocessing.sequence import pad_sequences
+from tensorflow.python.keras.callbacks import *
+from tensorflow.python.keras.preprocessing import image
+from tensorflow.python.keras.preprocessing.text import Tokenizer
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.neighbors import NearestNeighbors, LSHForest
 from numpy.random import normal
 from gensim.models import word2vec
-from keras.preprocessing.text import Tokenizer
 from nltk.tokenize import ToktokTokenizer
 from functools import reduce
 from itertools import chain
@@ -267,14 +257,14 @@ def copy_model(m):
     return res
 
 
-def insert_layer(model, new_layer, index):
-    res = Sequential()
-    for i,layer in enumerate(model.layers):
-        if i==index: res.add(new_layer)
-        copied = deserialize(wrap_config(layer))  # Keras2
-        res.add(copied)
-        copied.set_weights(layer.get_weights())
-    return res
+# def insert_layer(model, new_layer, index):
+#     res = Sequential()
+#     for i,layer in enumerate(model.layers):
+#         if i==index: res.add(new_layer)
+#         copied = deserialize(wrap_config(layer))  # Keras2
+#         res.add(copied)
+#         copied.set_weights(layer.get_weights())
+#     return res
 
 
 def adjust_dropout(weights, prev_p, new_p):

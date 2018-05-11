@@ -6,23 +6,40 @@ cyclic_lr = CyclicLR(base_lr=lr, max_lr=.001)
 optimizer = Nadam(lr=lr)  # possibly use Nadam
 loss = rmse
 
-
 class Structure:
-    def __init__(self, dataframe, targets, cat_cols, con_cols, random_state=42):
+    def __init__(self, dataframe, targets, cat_cols, con_cols, random_state=42, tar_type = 'value'):
         self.data = shfl(dataframe, random_state=random_state)
         self.random_state = random_state
         self.targets = targets
         self.cat_cols = cat_cols
         self.con_cols = con_cols
         for col in con_cols:
-            self.data[con_cols] = self.data[con_cols].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+            self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
             self.data[col].fillna(self.data[col].median(), inplace=True)
-            self.data[col].fillna(self.data[col].median(), inplace=True)
+            self.data[col].replace(np.NaN, 10000000000.0, inplace=True)
+
 
         for col in cat_cols:
-            self.data[con_cols] = self.data[con_cols].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+            self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
             self.data[col].fillna("None", inplace=True)
-            self.data[col].fillna("None", inplace=True)
+
+        self.tar_type = tar_type
+    # def __init__(self, database, targets, cat_cols, con_cols, random_state=42):
+    #     self.database = database
+    #     self.data = shfl(dataframe, random_state=random_state)
+    #     self.random_state = random_state
+    #     self.targets = targets
+    #     self.cat_cols = cat_cols
+    #     self.con_cols = con_cols
+    #     for col in con_cols:
+    #         self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+    #         self.data[col].fillna(self.data[col].median(), inplace=True)
+    #         self.data[col].replace(np.NaN, 10000000000.0, inplace=True)
+    #
+    #
+    #     for col in cat_cols:
+    #         self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+    #         self.data[col].fillna("None", inplace=True)
 
     def processing(self):
 
@@ -49,16 +66,18 @@ class Structure:
 
         return mapped
 
-    def img_process(self, data):
-        def norm_pixels(array):
-            return plot_array(array, log=False, resize=(150, 150), plot=False)
-
-        dfs = [data[self.ts_cols[i]] for i in range(len(self.ts_cols))]
-        norms = [np.apply_along_axis(func1d=norm_pixels, arr=dfs[i], axis=1) for i in range(len(dfs))]
-        return norms
+    # def img_process(self, data):
+    #     def norm_pixels(array):
+    #         return plot_array(array, log=False, resize=(150, 150), plot=False)
+    #
+    #     dfs = [data[self.ts_cols[i]] for i in range(len(self.ts_cols))]
+    #     norms = [np.apply_along_axis(func1d=norm_pixels, arr=dfs[i], axis=1) for i in range(len(dfs))]
+    #     return norms
 
     def embedding_train(self, epochs, batch_size, lr, validation_split, layers=[], dropouts=[], model='new',
                         shuffle=False, save=False, con_dim=10):
+
+        n_classes = self.data[self.targets].nunique(dropna=False)
         trn_gen, val_gen = trn_val_gens(self.data, self.data[self.targets], batch_size, validation_split,
                                         preprocessing=self.emb_process)
 
@@ -86,11 +105,20 @@ class Structure:
                 x = Dense(layers[i], activation='elu')(x)
                 x = Dropout(dropouts[i])(x)
 
-            output = Dense(1, activation='linear')(x)
-            model = Model(inputs=[inp for inp, e in embs] + [inp for inp, d in conts], outputs=output)
+            if self.tar_type == 'class':
+                loss = 'categorical_crossentropy'
+                output = Dense(n_classes, activation='softmax')(x)
+                model = Model(inputs=[inp for inp, e in embs] + [inp for inp, d in conts], outputs=output)
+                model.compile(optimizer=Nadam(lr=lr), loss=[loss])
+
+            elif self.tar_type == 'value':
+                loss = rmse
+                output = Dense(1, activation='linear')(x)
+                model = Model(inputs=[inp for inp, e in embs] + [inp for inp, d in conts], outputs=output)
+                model.compile(optimizer=Nadam(lr=lr), loss=[loss])
+
             # model = Model(inputs=[inp for inp, e in embs] + [conts[0]], outputs=output)
 
-            model.compile(optimizer=Nadam(lr=lr), loss=[rmse])
 
         history = model.fit_generator(trn_gen, epochs=epochs,
                                       verbose=1, validation_data=val_gen, callbacks=callbacks, shuffle=shuffle,
@@ -131,7 +159,7 @@ class Structure:
 
             model = Model(input=inp_list, output=output)
 
-            model.compile(optimizer=Nadam(lr=lr), loss=[rmse])
+            model.compile(optimizer=Nadam(lr=lr), loss=[loss])
 
         history = model.fit_generator(trn_gen, epochs=epochs, verbose=1, validation_data=val_gen, callbacks=callbacks,
                                       shuffle=shuffle, workers=multiprocessing.cpu_count())
@@ -187,6 +215,7 @@ class Structure:
 
             output = Dense(1, activation='linear')(x)
             model = Model(inputs=input, outputs=output)
+
             model.compile(optimizer=optimizer, loss=[rmse])
 
         history = model.fit_generator(trn_gen, epochs=epochs, verbose=1, validation_data=val_gen, callbacks=callbacks,
