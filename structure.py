@@ -7,23 +7,25 @@ optimizer = Nadam(lr=lr)  # possibly use Nadam
 loss = rmse
 
 class Structure:
-    def __init__(self, dataframe, targets, cat_cols, con_cols, random_state=42, tar_type = 'value'):
-        self.data = shfl(dataframe, random_state=random_state)
-        self.random_state = random_state
+    def __init__(self, dataframe, targets, cat_cols, con_cols, cat_mapper, con_mapper):
+        # self.data = shfl(dataframe, random_state=random_state)
+        self.dataframe = dataframe
+        self.random_state = 42
         self.targets = targets
         self.cat_cols = cat_cols
         self.con_cols = con_cols
-        for col in con_cols:
-            self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
-            self.data[col].fillna(self.data[col].median(), inplace=True)
-            self.data[col].replace(np.NaN, 10000000000.0, inplace=True)
+        self.cat_mapper = cat_mapper
+        self.con_mapper = con_mapper
+        # for col in con_cols:
+        #     self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+        #     self.data[col].fillna(self.data[col].median(), inplace=True)
+        #     self.data[col].replace(np.NaN, 10000000000.0, inplace=True)
+        #
+        #
+        # for col in cat_cols:
+        #     self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
+        #     self.data[col].fillna("None", inplace=True)
 
-
-        for col in cat_cols:
-            self.data[col] = self.data[col].replace([np.inf, -np.inf, np.nan, np.NaN, -1.0], np.NaN)
-            self.data[col].fillna("None", inplace=True)
-
-        self.tar_type = tar_type
     # def __init__(self, database, targets, cat_cols, con_cols, random_state=42):
     #     self.database = database
     #     self.data = shfl(dataframe, random_state=random_state)
@@ -59,12 +61,87 @@ class Structure:
         self.contin_map_fit = contin_map_fit
 
     def emb_process(self, data):
-        cat_map = cat_preproc(data, self.cat_map_fit)
-        con_map = con_preproc(data, self.contin_map_fit)
+        cat_map = cat_preproc(data, self.cat_mapper)
+        con_map = con_preproc(data, self.con_mapper)
 
-        mapped = split_cols(cat_map) + split_cols(con_map)
+        features = split_cols(cat_map) + split_cols(con_map)
+        targets = data[self.targets]
 
-        return mapped
+        return features, targets
+
+    def gen_wrapper(self, generator):
+        data = next(generator)
+        while True:
+            yield self.emb_process(data[self.cat_cols+self.con_cols]), data[self.targets]
+
+    def raw_gen(self):
+        while True:
+            data = next(self.dataframe)
+            cats, cons, tars = data[self.cat_cols], data[self.con_cols], data[self.targets]
+            yield self.dataset_proc(cats, cons, tars)
+
+    def dataset_proc(self, cats, cons, tars):
+        cat_map = cat_preproc(cats, self.cat_mapper)
+        con_map = con_preproc(cons, self.con_mapper)
+
+        features = split_cols(cat_map) + split_cols(con_map)
+        return features, tars
+
+    def gen_dataset(self, generator, batch_size):
+        dataset = Dataset.from_generator(generator, (tf.int32, tf.float32, tf.float32),
+                                         (tf.TensorShape([]), tf.TensorShape([]), tf.TensorShape([None])))
+
+        def wrapped_calc(cats, cons, tars):
+            return self.dataset_proc(cats, cons, tars)
+
+
+        dataset.shuffle(batch_size)
+        dataset = dataset.map(wrapped_calc, num_parallel_calls=6)
+        dataset = dataset.repeat()
+        dataset = dataset.batch(batch_size)
+
+        return dataset
+
+
+    def input_fn(self, batch_size):
+
+        col_defaults = [[0] for i in range(len(self.cat_cols))] + \
+                       [[0.0] for i in range(len(self.con_cols))] + \
+                       [[0.0] for i in range(len(self.targets))]
+
+
+
+        def parse_csv(value):
+            columns = tf.decode_csv(value, record_defaults=col_defaults)
+
+            inputs = {}
+            labels = None
+
+            features = dict(zip(self.cat_cols+self.con_cols + self.targets, columns))
+            features = columns[:len(self.cat_cols+self.con_cols)]
+            targets = columns[len(self.cat_cols+self.con_cols):]
+
+            for key in features:
+                if key in self.cat_cols + self.con_cols:
+                    inputs[key] = features[key]
+                elif key in self.targets:
+                    labels = features[key]
+
+            return inputs, labels
+
+        # dataset = tf.data.Dataset.from_generator()
+        dataset.shuffle(batch_size)
+        dataset = dataset.map(parse_csv, num_parallel_calls=6)
+        dataset = dataset.repeat()
+        dataset = dataset.batch(batch_size)
+        print('Dataset created')
+        return dataset
+
+    def dataset_gen(self, dataset):
+        iterator = dataset.make_one_shot_iterator()
+        next_batch = iterator.get_next()
+        while True:
+            yield next_batch
 
     # def img_process(self, data):
     #     def norm_pixels(array):
@@ -77,26 +154,30 @@ class Structure:
     def embedding_train(self, epochs, batch_size, lr, validation_split, layers=[], dropouts=[], model='new',
                         shuffle=False, save=False, con_dim=10):
 
-        n_classes = self.data[self.targets].nunique(dropna=False)
-        trn_gen, val_gen = trn_val_gens(self.data, self.data[self.targets], batch_size, validation_split,
-                                        preprocessing=self.emb_process)
+        # dataset = self.gen_dataset(self.raw_gen, batch_size)
+        # gen = self.dataset_gen(dataset)
+        gen= self.raw_gen()
+        # trn_gen, val_gen = trn_val_gens(self.data, self.data[self.targets], batch_size, validation_split,
+        #                                 preprocessing=self.emb_process)
 
-        cyclic_lr = CyclicLR(base_lr=lr, max_lr=lr * 100, step_size=(len(trn_gen) + len(val_gen)) / batch_size * 2,
-                             gamma=0.99)
+        # cyclic_lr = CyclicLR(base_lr=lr, max_lr=lr * 100, step_size=(len(trn_gen) + len(val_gen)) / batch_size * 2,
+        #                      gamma=0.99)
+
+        cyclic_lr = CyclicLR(base_lr=lr, max_lr=lr * 100, step_size=1000, gamma=0.99)
 
         checkpoints = ModelCheckpoint('emb_model.h5', monitor='val_loss', verbose=1, save_best_only=True,
                                       save_weights_only=False, mode='auto', period=1)
 
-        emb_outs = [cat_map_info(feat)[1] for feat in self.cat_map_fit.features]
+        emb_outs = [cat_map_info(feat)[1] for feat in self.cat_mapper.features]
         cat_outs = [(i + 1) // 2 if (i + 1) // 2 <= 50 else 50 for i in emb_outs]
         con_outs = [con_dim for i in range(len(self.con_cols))]
 
         callbacks = [cyclic_lr]
         if save == True: callbacks.append(checkpoints)
         if model == 'new':
-            embs = [struc_emb(feat) for feat in self.cat_map_fit.features]
-            conts = [struc_con(feat, con_dim) for feat in self.contin_map_fit.features]
-            # conts =  struc_cons(self.contin_map_fit.features, con_dim)
+            embs = [struc_emb(feat) for feat in self.cat_mapper.features]
+            conts = [struc_con(feat, con_dim) for feat in self.con_mapper.features]
+            # conts =  struc_costrk.cat_cols+strk.con_colsns(self.contin_map_fit.features, con_dim)
 
             x = concatenate([e for inp, e in embs] + [d for inp, d in conts], name='concat_outputs')
             # x = concatenate([e for inp,e in embs] + [conts[0]], name='concat_outputs')
@@ -105,23 +186,20 @@ class Structure:
                 x = Dense(layers[i], activation='elu')(x)
                 x = Dropout(dropouts[i])(x)
 
-            if self.tar_type == 'class':
-                loss = 'categorical_crossentropy'
-                output = Dense(n_classes, activation='softmax')(x)
-                model = Model(inputs=[inp for inp, e in embs] + [inp for inp, d in conts], outputs=output)
-                model.compile(optimizer=Nadam(lr=lr), loss=[loss])
-
-            elif self.tar_type == 'value':
-                loss = rmse
-                output = Dense(1, activation='linear')(x)
-                model = Model(inputs=[inp for inp, e in embs] + [inp for inp, d in conts], outputs=output)
-                model.compile(optimizer=Nadam(lr=lr), loss=[loss])
+            loss = rmse
+            output = Dense(1, activation='linear')(x)
+            model = Model(inputs=[inp for inp, e in embs] + [inp for inp, d in conts], outputs=output)
+            model.compile(optimizer=Nadam(lr=lr), loss=[loss])
 
             # model = Model(inputs=[inp for inp, e in embs] + [conts[0]], outputs=output)
 
 
-        history = model.fit_generator(trn_gen, epochs=epochs,
-                                      verbose=1, validation_data=val_gen, callbacks=callbacks, shuffle=shuffle,
+        # history = model.fit_generator(trn_gen, epochs=epochs,
+        #                               verbose=1, validation_data=val_gen, callbacks=callbacks, shuffle=shuffle,
+        #                               workers=multiprocessing.cpu_count())
+
+        history = model.fit_generator(gen, epochs=epochs, steps_per_epoch= 1000,
+                                      verbose=1, callbacks=callbacks, shuffle=shuffle,
                                       workers=multiprocessing.cpu_count())
 
         self.emb_model = model
@@ -161,7 +239,7 @@ class Structure:
 
             model.compile(optimizer=Nadam(lr=lr), loss=[loss])
 
-        history = model.fit_generator(trn_gen, epochs=epochs, verbose=1, validation_data=val_gen, callbacks=callbacks,
+        history = model.fit_generator(trn_gen, steps_per_epoch= 1000, epochs=epochs, verbose=1, validation_data=val_gen, callbacks=callbacks,
                                       shuffle=shuffle, workers=multiprocessing.cpu_count())
 
         self.img_model = model
@@ -299,3 +377,63 @@ class Estimator:
 
         reg.train(input_fn=lambda: self.train_input_fn(self.train_data, self.train_targets, batch_size))
         return reg
+
+batch_size = 256
+
+complete_data = pd.read_csv("Mapped_Augmented_Train.csv", chunksize=batch_size)
+
+sample = next(complete_data)
+
+tar_periods = 7
+
+target_cat_cols = [f'{i+1}_per_tar_cat' for i in range(tar_periods)]
+
+target_val_cols = [f'{i+1}_per_tar_val' for i in range(tar_periods)]
+
+target_cols = target_cat_cols+target_val_cols
+
+target_col = ['3_per_tar_val']
+
+drop_cols = [
+ 'Unnamed: 0',
+ 'index',
+ 'id'
+]
+
+cat_cols = [
+ 'name',
+ 'symbol',
+ 'rank',
+ 'max_sell_ex',
+ 'min_sell_ex',
+ 'max_buy_ex',
+ 'min_buy_ex',
+ 'Event_Count',
+ 'Time_Year',
+ 'Time_Month',
+ 'Time_Week',
+ 'Time_Day',
+ 'Time_Dayofweek',
+ 'Time_Dayofyear',
+ 'Time_Hour',
+ 'Time_Minute',
+ 'Time_Is_month_end',
+ 'Time_Is_month_start',
+ 'Time_Is_quarter_end',
+ 'Time_Is_quarter_start',
+ 'Time_Is_year_end',
+ 'Time_Is_year_start',
+ 'Time_Elapsed'
+]
+
+con_cols = [col for col in list(sample) if col not in target_cols+drop_cols+cat_cols]
+
+cat_mapper = unpickle("C:\\Users\\tales\Code\structured_analysis\cat_mapper.pkl")
+con_mapper = unpickle("C:\\Users\\tales\Code\structured_analysis\con_mapper.pkl")
+
+data = pd.read_csv("Augmented_Train.csv", chunksize=batch_size)
+
+strk = Structure(data, target_col, cat_cols, con_cols, cat_mapper, con_mapper)
+
+strk.embedding_train(3, batch_size, 0.001, 0.1, layers=[256, 256, 256], dropouts=[0.5, 0.5, 0.5], model='new',
+                        shuffle=False, save=False, con_dim=10)

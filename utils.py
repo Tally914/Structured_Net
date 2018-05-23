@@ -14,6 +14,7 @@ import basc_py4chan as py4chan
 from datetime import timedelta
 from twitter import *
 import praw
+from tensorflow.python.data import Dataset
 from sklearn_pandas import DataFrameMapper
 from sklearn.preprocessing import LabelEncoder, Imputer, StandardScaler
 import pandas as pd
@@ -742,6 +743,26 @@ class Seq_Gen(Sequence):
         else:
             return self.preprocess(batch_x), batch_y
 
+class Seq_Gen_CSV(Sequence):
+    def __init__(self, pd_gen, x_set, y_set, batch_size, preprocessing=None):
+        batch = next(pd_gen)
+
+        self.x, self.y = batch[x_set], batch[y_set]
+        self.batch_size = int(batch_size)
+        self.preprocess = preprocessing
+
+    def __len__(self):
+        return int(np.ceil(len(self.x) / int(self.batch_size)))
+
+    def __getitem__(self, idx):
+        idx = int(idx)
+        batch_x = self.x[int(idx * self.batch_size):int((idx + 1) * self.batch_size)]
+        batch_y = self.y[int(idx * self.batch_size):int((idx + 1) * self.batch_size)]
+        if self.preprocess == None:
+            return batch_x, batch_y
+        else:
+            return self.preprocess(batch_x), batch_y
+
 
 def trn_val_gens(x_set, y_set, batch_size, val_split, preprocessing=None):
     num_batches = int(np.floor(len(x_set)/batch_size))
@@ -1187,3 +1208,68 @@ def tweet_cleaning(dataset_location, sentiment='Sentiment', text='Text'):
     for tweet in tweets:
         corpus.append(' <start> ' + str(tweet) + ' <end> ')
     return corpus, tweets, labels
+
+
+def create_csv_iterator(csv_file_path, skip_header):
+    with tf.gfile.Open(csv_file_path) as csv_file:
+        reader = csv.reader(csv_file)
+        if skip_header:  # Skip the header
+            next(reader)
+        for row in reader:
+            yield row
+
+
+def create_example(row, header, unused_features, numeric_features, categorical_features, target_name):
+    """
+    Returns a tensorflow.Example Protocol Buffer object.
+    """
+    example = tf.train.Example()
+
+    for i in range(len(header)):
+
+        feature_name = header[i]
+        feature_value = row[i]
+
+        if feature_name in unused_features:
+            continue
+
+        if feature_name in numeric_features:
+            example.features.feature[feature_name].float_list.value.extend([float(feature_value)])
+
+        elif feature_name in categorical_features:
+            example.features.feature[feature_name].bytes_list.value.extend([bytes(feature_value, 'utf-8')])
+
+
+        elif feature_name in target_name:
+            example.features.feature[feature_name].float_list.value.extend([float(feature_value)])
+
+    return example
+
+def create_tfrecords_file(input_csv_file, header, unused_features, numeric_features, categorical_features, target_name):
+    """
+    Creates a TFRecords file for the given input data and
+    example transofmration function
+    """
+    output_tfrecord_file = input_csv_file.replace("csv", "tfrecords")
+    writer = tf.python_io.TFRecordWriter(output_tfrecord_file)
+
+    print("Creating TFRecords file at", output_tfrecord_file, "...")
+
+    for i, row in enumerate(create_csv_iterator(input_csv_file, skip_header=False)):
+
+        if len(row) == 0:
+            continue
+
+        example = create_example(row, header, unused_features, numeric_features, categorical_features, target_name)
+        content = example.SerializeToString()
+        writer.write(content)
+
+    writer.close()
+
+    print("Finish Writing", output_tfrecord_file)
+
+def run_tensorboard(log_dir, debug_port):
+    from tensorboard import main as tb
+    tf.flags.FLAGS.logdir = log_dir
+    tf.flags.FLAGS.debugger_port = debug_port
+    tb.main()
